@@ -1,0 +1,35 @@
+version: '3.8'
+
+services:
+  postfix_exporter:
+    image: kumina/postfix_exporter:latest
+    container_name: postfix_exporter
+    restart: unless-stopped
+    ports:
+      - "9154:9154"
+    volumes:
+      # O exporter precisa ler o log do postfix e o socket do showq
+      - /var/log/mail.log:/var/log/mail.log:ro
+      - /var/spool/postfix/public/showq:/var/spool/postfix/public/showq:ro
+    command:
+      - "--postfix.logfile_path=/var/log/mail.log"
+      - "--postfix.showq_path=/var/spool/postfix/public/showq"
+
+  # O postfix_exporter não suporta labels customizados nativamente.
+  # O prometheus-proxy (prom-label-proxy) injeta a label "cliente" em todas as
+  # métricas ANTES de expô-las ao OTel Collector.
+  # O coletor central faz scrape na porta 9155 (proxy), não na 9154 diretamente.
+  label-proxy:
+    image: quay.io/prometheuscommunity/prom-label-proxy:latest
+    container_name: postfix_label_proxy
+    restart: unless-stopped
+    ports:
+      - "9155:9155"
+    env_file:
+      - .env
+    command:
+      - "--insecure-listen-address=0.0.0.0:9155"
+      - "--upstream=http://postfix_exporter:9154"
+      - "--label=cliente=${CLIENTE}"
+    depends_on:
+      - postfix_exporter

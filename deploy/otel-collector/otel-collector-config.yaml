@@ -1,0 +1,55 @@
+receivers:
+  # O receiver prometheus faz scrape (pull) de todos os postfix_exporters.
+  # IMPORTANTE: O alvo é a porta 9155 (prom-label-proxy), não 9154 diretamente.
+  # O proxy injeta a label "cliente" em todas as métricas antes de repassá-las.
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'postfix_servers'
+          scrape_interval: 15s
+          static_configs:
+            # Cada entrada aponta para o prom-label-proxy do servidor MX.
+            # A label "cliente" já vem preenchida pelo proxy; adicione aqui
+            # apenas labels de infraestrutura (datacenter, role, etc.).
+            - targets:
+                - '10.0.1.101:9155'
+              labels:
+                server_name: 'mx-primary'
+                datacenter: 'us-east'
+            - targets:
+                - '10.0.1.102:9155'
+              labels:
+                server_name: 'mx-secondary'
+                datacenter: 'us-east'
+            - targets:
+                - '10.0.2.101:9155'
+              labels:
+                server_name: 'mx-dr'
+                datacenter: 'eu-west'
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+
+  resource:
+    attributes:
+      - key: service.name
+        value: "postfix_cluster"
+        action: upsert
+
+exporters:
+  otlphttp/grafana:
+    endpoint: "${GRAFANA_OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Basic ${GRAFANA_OTLP_AUTH_BASE64}"
+
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [batch, resource]
+      exporters: [otlphttp/grafana, debug]
