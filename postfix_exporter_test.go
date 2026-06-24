@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -343,6 +344,10 @@ func assertVecMetricsEquals(t *testing.T, counter *prometheus.CounterVec, expect
 			metric.Write(&metricDto)
 			res = append(res, metricDto.String())
 		}
+		// A ordem de entrega pelo canal não é determinística; ordenamos ambas as
+		// slices antes de comparar para evitar falsos negativos.
+		sort.Strings(res)
+		sort.Strings(expected)
 		assert.Equal(t, expected, res, message)
 	}
 }
