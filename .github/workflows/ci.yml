@@ -43,7 +43,9 @@ jobs:
         run: go vet ./...
 
       - name: Run tests with coverage
-        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        # -coverpkg aponta explicitamente para o pacote principal para evitar o erro
+        # "no such tool covdata" causado pelo subpackage mock/ que não tem _test.go.
+        run: go test -race -coverprofile=coverage.out -covermode=atomic -coverpkg=github.com/vericode-io/postfix_exporter .
 
       - name: Check coverage threshold (≥ 70%)
         run: |

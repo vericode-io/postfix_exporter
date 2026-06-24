@@ -1,4 +1,4 @@
-module github.com/kumina/postfix_exporter
+module github.com/vericode-io/postfix_exporter
 
 go 1.25.0
 
