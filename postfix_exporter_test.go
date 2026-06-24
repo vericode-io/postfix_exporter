@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"sort"
 	"testing"
 
@@ -237,11 +238,11 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 					"Mar 16 23:30:44 123-mail postfix/qmgr[29980]: warning: please avoid flushing the whole queue when you have",
 					"Mar 16 23:30:44 123-mail postfix/qmgr[29980]: warning: lots of deferred mail, that is bad for performance",
 				},
-				unsupportedLogEntries: []string{
-					`label:<name:"level" value:"" > label:<name:"service" value:"smtpd" > counter:<value:1 > `,
-					`label:<name:"level" value:"fatal" > label:<name:"service" value:"smtpd" > counter:<value:1 > `,
-					`label:<name:"level" value:"warning" > label:<name:"service" value:"qmgr" > counter:<value:2 > `,
-				},
+			unsupportedLogEntries: []string{
+				`label:<name:"level" value:""> label:<name:"service" value:"smtpd"> counter:<value:1> `,
+				`label:<name:"level" value:"fatal"> label:<name:"service" value:"smtpd"> counter:<value:1> `,
+				`label:<name:"level" value:"warning"> label:<name:"service" value:"qmgr"> counter:<value:2> `,
+			},
 			},
 			fields: fields{
 				unsupportedLogEntries: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"service", "level"}),
@@ -331,6 +332,17 @@ func assertCounterEquals(t *testing.T, counter prometheus.Collector, expected in
 		}
 	}
 }
+// metricKey constrói uma chave canonica para um Metric baseada apenas nos
+// labels e no valor do counter, ignorando campos voláteis como created_timestamp
+// que variam entre versões do prometheus/client_model.
+func metricKey(m *io_prometheus_client.Metric) string {
+	var labels string
+	for _, lp := range m.GetLabel() {
+		labels += fmt.Sprintf(`label:<name:%q value:%q> `, lp.GetName(), lp.GetValue())
+	}
+	return fmt.Sprintf("%scounter:<value:%v> ", labels, m.GetCounter().GetValue())
+}
+
 func assertVecMetricsEquals(t *testing.T, counter *prometheus.CounterVec, expected []string, message string) {
 	if expected != nil {
 		metricsChan := make(chan prometheus.Metric)
@@ -342,7 +354,9 @@ func assertVecMetricsEquals(t *testing.T, counter *prometheus.CounterVec, expect
 		for metric := range metricsChan {
 			metricDto := io_prometheus_client.Metric{}
 			metric.Write(&metricDto)
-			res = append(res, metricDto.String())
+			// Usa chave canônica para ser agnóstico ao formato de serialização
+			// do protobuf (mudou entre versões do client_model).
+			res = append(res, metricKey(&metricDto))
 		}
 		// A ordem de entrega pelo canal não é determinística; ordenamos ambas as
 		// slices antes de comparar para evitar falsos negativos.
