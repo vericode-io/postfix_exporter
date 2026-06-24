@@ -133,7 +133,13 @@ jobs:
         # Quando todas as dependências estiverem atualizadas e sem CVEs, este step
         # passará com exit code 0 e poderá ser alterado para falhar em qualquer código != 0.
         run: |
-          govulncheck ./... ; EXIT_CODE=$?
+          # set +e impede que o shell aborte imediatamente quando govulncheck
+          # retorna exit code != 0. Sem isso, o GitHub Actions (que usa set -e
+          # por padrão) falha antes do 'if' capturar o código de saída.
+          set +e
+          govulncheck ./...
+          EXIT_CODE=$?
+          set -e
           if [ $EXIT_CODE -eq 3 ]; then
             echo "::warning::govulncheck encontrou vulnerabilidades em símbolos chamados pelo código. Verifique os logs acima e atualize as dependências."
             exit 0

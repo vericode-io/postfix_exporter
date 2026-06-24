@@ -1,4 +1,4 @@
-FROM golang:1.21 AS builder
+FROM golang:1.25 AS builder
 WORKDIR /src
 
 # avoid downloading the dependencies on succesive builds
@@ -14,7 +14,7 @@ COPY . .
 
 # Force the go compiler to use modules
 ENV GO111MODULE=on
-RUN go test
+RUN go test -coverpkg=github.com/vericode-io/postfix_exporter .
 RUN go build -o /bin/postfix_exporter
 
 FROM debian:bookworm-slim

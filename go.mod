@@ -5,7 +5,7 @@ go 1.25.0
 require (
 	github.com/alecthomas/kingpin v2.2.6+incompatible
 	github.com/coreos/go-systemd/v22 v22.0.0
-	github.com/docker/docker v25.0.7+incompatible
+	github.com/docker/docker v25.0.13+incompatible
 	github.com/nxadm/tail v1.4.8
 	github.com/prometheus/client_golang v1.20.5
 	github.com/prometheus/client_model v0.6.1
