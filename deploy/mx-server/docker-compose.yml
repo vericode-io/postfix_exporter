@@ -1,0 +1,22 @@
+services:
+  postfix_exporter:
+    build: ../..
+    container_name: postfix_exporter
+    restart: unless-stopped
+    user: "root:adm"
+    ports:
+      - "9154:9154"
+    volumes:
+      # O exporter precisa ler o log do postfix e o socket do showq
+      - /var/log/mail.log:/var/log/mail.log:ro
+      - /var/spool/postfix/public/showq:/var/spool/postfix/public/showq:ro
+    command:
+      - "--web.listen-address=0.0.0.0:9154"
+      - "--postfix.logfile_path=/var/log/mail.log"
+      - "--postfix.showq_path=/var/spool/postfix/public/showq"
+    networks:
+      - monitoring_net
+
+networks:
+  monitoring_net:
+    external: true

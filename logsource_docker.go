@@ -20,6 +20,7 @@ type DockerLogSource struct {
 	client      DockerClient
 	containerID string
 	reader      *bufio.Reader
+	stream      io.ReadCloser
 }
 
 // A DockerClient is the client interface that client.Client
@@ -45,12 +46,16 @@ func NewDockerLogSource(ctx context.Context, c DockerClient, containerID string)
 		client:      c,
 		containerID: containerID,
 		reader:      bufio.NewReader(r),
+		stream:      r,
 	}
 
 	return logSrc, nil
 }
 
 func (s *DockerLogSource) Close() error {
+	if s.stream != nil {
+		s.stream.Close()
+	}
 	return s.client.Close()
 }
 
@@ -59,11 +64,26 @@ func (s *DockerLogSource) Path() string {
 }
 
 func (s *DockerLogSource) Read(ctx context.Context) (string, error) {
-	line, err := s.reader.ReadString('\n')
-	if err != nil {
-		return "", err
+	type readResult struct {
+		line string
+		err  error
 	}
-	return strings.TrimSpace(line), nil
+	ch := make(chan readResult, 1)
+
+	go func() {
+		line, err := s.reader.ReadString('\n')
+		ch <- readResult{line, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case res := <-ch:
+		if res.err != nil {
+			return "", res.err
+		}
+		return strings.TrimSpace(res.line), nil
+	}
 }
 
 // A dockerLogSourceFactory is a factory that can create

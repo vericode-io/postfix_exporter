@@ -1,0 +1,49 @@
+receivers:
+  # O receiver prometheus faz scrape (pull) de todos os postfix_exporters
+  # diretamente na porta 9154. A label "cliente" é injetada aqui via
+  # static_configs.labels — não é necessário nenhum proxy no servidor MX.
+  #
+  # COMO ADICIONAR UM NOVO SERVIDOR:
+  #   1. Adicione um novo bloco "- targets:" abaixo
+  #   2. Defina "cliente" com o nome do tenant dono do servidor
+  #   3. Reinicie o coletor: docker compose restart otel-collector
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: 'postfix_servers'
+          scrape_interval: 5s
+          static_configs:
+            # ── Servidor MX 1 ──────────────────────────────────────────────
+            - targets:
+                - 'postfix_exporter:9154'
+              labels:
+                cliente: 'vericode'
+                server_name: 'mx-primary'
+                datacenter: 'us-east'
+
+processors:
+  batch:
+    send_batch_size: 1000
+    timeout: 1s
+
+  resource:
+    attributes:
+      - key: service.name
+        value: "postfix_cluster"
+        action: upsert
+
+exporters:
+  otlp_http/grafana:
+    endpoint: "${GRAFANA_OTLP_ENDPOINT}"
+    headers:
+      Authorization: "Basic ${GRAFANA_OTLP_AUTH_BASE64}"
+
+  debug:
+    verbosity: detailed
+
+service:
+  pipelines:
+    metrics:
+      receivers: [prometheus]
+      processors: [batch, resource]
+      exporters: [otlp_http/grafana, debug]

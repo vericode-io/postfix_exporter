@@ -59,7 +59,7 @@ func NewSystemdLogSource(j SystemdJournal, path, unit, slice string) (*SystemdLo
 
 	if r := logSrc.journal.Wait(1 * time.Second); r < 0 {
 		logSrc.journal.Close()
-		return nil, err
+		return nil, fmt.Errorf("journal wait failed with code %d", r)
 	}
 
 	return logSrc, nil

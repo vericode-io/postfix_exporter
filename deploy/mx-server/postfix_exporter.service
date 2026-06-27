@@ -1,0 +1,23 @@
+# ──────────────────────────────────────────────────────────────────────────────
+# UNIT 1/2: postfix_exporter
+# Expõe as métricas brutas do Postfix na porta 9154 (apenas loopback).
+# O OTel Collector NÃO deve raspar esta porta diretamente.
+# ──────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Postfix Exporter para Prometheus/OTel
+After=network.target postfix.service
+Requires=postfix.service
+
+[Service]
+Type=simple
+User=postfix
+Group=postfix
+ExecStart=/usr/local/bin/postfix_exporter \
+    --postfix.logfile_path=/var/log/mail.log \
+    --postfix.showq_path=/var/spool/postfix/public/showq \
+    --web.listen-address=127.0.0.1:9154
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
