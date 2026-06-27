@@ -11,31 +11,15 @@ receivers:
     config:
       scrape_configs:
         - job_name: 'postfix_servers'
-          scrape_interval: 15s
+          scrape_interval: 5s
           static_configs:
             # ── Servidor MX 1 ──────────────────────────────────────────────
             - targets:
-                - '10.0.1.101:9154'
+                - 'postfix_exporter:9154'
               labels:
-                cliente: 'acme-corp'
+                cliente: 'vericode'
                 server_name: 'mx-primary'
                 datacenter: 'us-east'
-
-            # ── Servidor MX 2 ──────────────────────────────────────────────
-            - targets:
-                - '10.0.1.102:9154'
-              labels:
-                cliente: 'acme-corp'
-                server_name: 'mx-secondary'
-                datacenter: 'us-east'
-
-            # ── Servidor MX de outro cliente ───────────────────────────────
-            - targets:
-                - '10.0.2.101:9154'
-              labels:
-                cliente: 'cliente-xyz'
-                server_name: 'mx-primary'
-                datacenter: 'eu-west'
 
 processors:
   batch:
@@ -49,7 +33,7 @@ processors:
         action: upsert
 
 exporters:
-  otlphttp/grafana:
+  otlp_http/grafana:
     endpoint: "${GRAFANA_OTLP_ENDPOINT}"
     headers:
       Authorization: "Basic ${GRAFANA_OTLP_AUTH_BASE64}"
@@ -62,4 +46,4 @@ service:
     metrics:
       receivers: [prometheus]
       processors: [batch, resource]
-      exporters: [otlphttp/grafana, debug]
+      exporters: [otlp_http/grafana, debug]

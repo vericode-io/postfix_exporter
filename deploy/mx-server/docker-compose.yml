@@ -1,8 +1,9 @@
 services:
   postfix_exporter:
     build: ../..
+    container_name: postfix_exporter
     restart: unless-stopped
-    user: "root:root"
+    user: "root:adm"
     ports:
       - "9154:9154"
     volumes:
@@ -13,18 +14,9 @@ services:
       - "--web.listen-address=0.0.0.0:9154"
       - "--postfix.logfile_path=/var/log/mail.log"
       - "--postfix.showq_path=/var/spool/postfix/public/showq"
+    networks:
+      - monitoring_net
 
-# NOTA: A label "cliente" NÃO é injetada aqui no servidor MX.
-# O prom-label-proxy não serve o endpoint /metrics — ele é um proxy de
-# queries PromQL (para Prometheus/Thanos) e não é adequado para este caso.
-#
-# A label "cliente" é injetada pelo OTel Collector centralizado via
-# static_configs.labels no otel-collector-config.yaml:
-#
-#   static_configs:
-#     - targets: ['IP_DESTE_MX:9154']
-#       labels:
-#         cliente: nome-do-cliente
-#
-# Isso garante que cada série temporal chegue ao Grafana Cloud com a
-# label correta sem nenhum componente extra neste servidor.
+networks:
+  monitoring_net:
+    external: true
