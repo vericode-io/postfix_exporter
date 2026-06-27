@@ -1,34 +1,32 @@
-# Deploy: Postfix Exporter + Label Proxy + OTel Collector → Grafana Cloud
+# Deploy: Postfix Exporter + OTel Collector → Grafana Cloud
 
 Esta pasta contém o setup completo para monitorar **múltiplos servidores Postfix** de forma centralizada, com suporte a label `cliente` por servidor e exportação de métricas para o **Grafana Cloud via OTLP**.
 
 ## Arquitetura
 
 ```
-┌─────────────────────────────────────┐
-│         Servidor MX (Postfix)       │
-│                                     │
-│  postfix_exporter :9154 (loopback)  │
-│           │                         │
-│  prom-label-proxy :9155  ◀──────────┼── scrape (OTel Collector)
-│  (injeta label cliente=X)           │
-└─────────────────────────────────────┘
-                  ▲
-                  │  scrape (pull, porta 9155)
-                  │
-┌─────────────────────────────────────┐
-│       Servidor Central              │
-│                                     │
-│       OTel Collector                │
-│  (agrega N servidores MX)           │
-│           │                         │
-│           │  OTLP/HTTP (push)       │
-└───────────┼─────────────────────────┘
+┌─────────────────────────────────────────┐
+│  Servidor MX (Postfix roda no HOST)     │
+│                                         │
+│  [Postfix] ──socket/log──▶              │
+│  [postfix_exporter :9154] (Docker)      │
+└──────────────────┬──────────────────────┘
+                   │  scrape (pull, porta 9154)
+                   ▼
+┌─────────────────────────────────────────┐
+│  Servidor Central                       │
+│                                         │
+│  [OTel Collector] (Docker)              │
+│  · injeta label cliente= por target     │
+│  · agrega N servidores MX               │
+│           │                             │
+│           │  OTLP/HTTP (push)           │
+└───────────┼─────────────────────────────┘
             ▼
      Grafana Cloud
 ```
 
-O `postfix_exporter` **não suporta labels customizados nativamente**. O `prom-label-proxy` resolve isso interceptando o scrape e injetando o label `cliente` em todas as métricas antes de repassá-las ao coletor. O exporter fica restrito ao loopback (`127.0.0.1:9154`) e o proxy é o único ponto de acesso externo (`:9155`).
+A label `cliente` **não requer nenhum proxy** no servidor MX. Ela é injetada pelo OTel Collector via `static_configs.labels` no momento do scrape.
 
 ---
 
@@ -37,14 +35,13 @@ O `postfix_exporter` **não suporta labels customizados nativamente**. O `prom-l
 ```
 deploy/
 ├── mx-server/                         # Instalar em cada servidor Postfix
-│   ├── docker-compose.yml             # Sobe exporter + proxy via Docker
-│   ├── .env.example                   # Template: define CLIENTE=nome-do-cliente
-│   ├── postfix_exporter.service       # Alternativa systemd para o exporter
-│   └── postfix_label_proxy.service    # Alternativa systemd para o proxy
+│   ├── docker-compose.yml             # Sobe o postfix_exporter via Docker
+│   ├── .env.example                   # Template de variáveis (referência)
+│   └── postfix_exporter.service       # Alternativa: systemd sem Docker
 │
 └── otel-collector/                    # Instalar no servidor central
     ├── docker-compose.yml             # Sobe o OTel Collector via Docker
-    ├── otel-collector-config.yaml     # Configuração: scrape targets + export OTLP
+    ├── otel-collector-config.yaml     # Scrape targets + labels + export OTLP
     └── .env.example                   # Template: credenciais Grafana Cloud
 ```
 
@@ -52,56 +49,77 @@ deploy/
 
 ## Passo 1 — Servidores MX (em cada servidor Postfix)
 
+### Pré-requisito: rede Docker compartilhada
+
+Se o OTel Collector e o `postfix_exporter` rodam no **mesmo servidor**, crie a rede externa uma única vez:
+
+```bash
+docker network create monitoring_net
+```
+
+> Se estão em **servidores diferentes**, não é necessário criar a rede — a comunicação ocorre via IP normal. Nesse caso, remova a seção `networks` dos dois `docker-compose.yml` e use o IP real do servidor MX no `otel-collector-config.yaml`.
+
 ### Opção A: Docker Compose
 
 ```bash
 cd deploy/mx-server
-cp .env.example .env
-# Edite .env e defina o nome do cliente:
-echo "CLIENTE=acme-corp" > .env
-docker-compose up -d
-# Verifique se a label está sendo injetada:
-curl -s http://localhost:9155/metrics | grep 'cliente='
+docker compose up -d
+
+# Verifique se o exporter está respondendo:
+curl -s http://localhost:9154/metrics | head -5
 ```
+
+O Postfix roda no **host** (fora do Docker). O exporter acessa o socket e o log via bind mounts:
+- `/var/spool/postfix/public/showq` → socket Unix do Postfix
+- `/var/log/mail.log` → arquivo de log
+
+O usuário `root:adm` é necessário para leitura do log (grupo `adm` no Debian/Ubuntu).
 
 ### Opção B: Systemd (sem Docker)
 
 ```bash
-# 1. Instalar o binário do prom-label-proxy
-VERSAO=0.11.0
-curl -L "https://github.com/prometheus-community/prom-label-proxy/releases/download/v${VERSAO}/prom-label-proxy_${VERSAO}_linux_amd64.tar.gz" \
-  | tar xz && sudo mv prom-label-proxy /usr/local/bin/
-
-# 2. Editar o valor CLIENTE no arquivo .service
-sudo nano postfix_label_proxy.service   # altere Environment="CLIENTE=nome-do-cliente"
-
-# 3. Instalar e ativar ambas as units
-sudo cp postfix_exporter.service postfix_label_proxy.service /etc/systemd/system/
+# Instalar o binário
+sudo cp postfix_exporter /usr/local/bin/
+sudo cp postfix_exporter.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now postfix_exporter postfix_label_proxy
+sudo systemctl enable --now postfix_exporter
+
+# Verificar:
+curl -s http://localhost:9154/metrics | head -5
 ```
 
 ---
 
 ## Passo 2 — Servidor Central (OTel Collector)
 
+### 1. Configurar credenciais do Grafana Cloud
+
 ```bash
 cd deploy/otel-collector
-
-# 1. Configurar credenciais do Grafana Cloud
 cp .env.example .env
 nano .env
 # Preencha GRAFANA_OTLP_ENDPOINT e GRAFANA_OTLP_AUTH_BASE64
 # Para gerar o Base64: echo -n "INSTANCE_ID:API_KEY" | base64
+```
 
-# 2. Adicionar os IPs dos servidores MX
-nano otel-collector-config.yaml
-# Em static_configs, substitua os IPs de exemplo pelos seus servidores reais.
-# Cada entrada pode ter labels customizados (server_name, datacenter, etc.)
+### 2. Adicionar os servidores MX como targets
 
-# 3. Subir o coletor
-docker-compose up -d
-docker-compose logs -f   # verifique se está enviando sem erros
+Edite `otel-collector-config.yaml` e adicione um bloco por servidor:
+
+```yaml
+static_configs:
+  - targets: ['IP_DO_MX:9154']       # IP real ou nome do serviço Docker
+    labels:
+      cliente: 'nome-do-cliente'     # label injetada em todas as métricas
+      server_name: 'mx-primary'
+      datacenter: 'sa-east'
+```
+
+### 3. Subir o coletor
+
+```bash
+docker compose up -d
+docker compose logs -f   # verifique se está enviando sem erros
 ```
 
 ### Como obter as credenciais do Grafana Cloud
@@ -110,6 +128,15 @@ docker-compose logs -f   # verifique se está enviando sem erros
 2. Copie a **URL do endpoint OTLP** (ex: `https://otlp-gateway-prod-us-east-0.grafana.net/otlp`)
 3. Gere um **API Token** com escopo `MetricsPublisher`
 4. Gere o Base64: `echo -n "SEU_INSTANCE_ID:SEU_API_TOKEN" | base64`
+
+---
+
+## Cenários de rede
+
+| Cenário | Configuração |
+|---|---|
+| MX e OTel Collector no **mesmo servidor** | Criar rede externa: `docker network create monitoring_net`. Target: `postfix_exporter:9154` (nome do serviço) |
+| MX e OTel Collector em **servidores diferentes** | Sem rede compartilhada. Target: `IP_DO_MX:9154`. Remover seção `networks` dos dois composes |
 
 ---
 
