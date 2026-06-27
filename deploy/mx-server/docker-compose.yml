@@ -1,27 +1,29 @@
-version: '3.8'
-
 services:
   postfix_exporter:
-    image: kumina/postfix_exporter:latest
-    container_name: postfix_exporter
+    build: ../..
     restart: unless-stopped
+    user: "root:root"
+    # Escuta apenas no loopback — o acesso externo é feito exclusivamente
+    # pelo label-proxy na porta 9155, que injeta a label "cliente".
     ports:
-      - "9154:9154"
+      - "127.0.0.1:9154:9154"
     volumes:
       # O exporter precisa ler o log do postfix e o socket do showq
       - /var/log/mail.log:/var/log/mail.log:ro
       - /var/spool/postfix/public/showq:/var/spool/postfix/public/showq:ro
     command:
+      - "--web.listen-address=0.0.0.0:9154"
       - "--postfix.logfile_path=/var/log/mail.log"
       - "--postfix.showq_path=/var/spool/postfix/public/showq"
+    networks:
+      - monitoring_net
 
   # O postfix_exporter não suporta labels customizados nativamente.
-  # O prometheus-proxy (prom-label-proxy) injeta a label "cliente" em todas as
-  # métricas ANTES de expô-las ao OTel Collector.
-  # O coletor central faz scrape na porta 9155 (proxy), não na 9154 diretamente.
+  # O prom-label-proxy injeta a label "cliente" em todas as métricas
+  # ANTES de expô-las ao OTel Collector centralizado.
+  # O coletor central faz scrape na porta 9155 (proxy), não na 9154.
   label-proxy:
     image: quay.io/prometheuscommunity/prom-label-proxy:latest
-    container_name: postfix_label_proxy
     restart: unless-stopped
     ports:
       - "9155:9155"
@@ -30,6 +32,13 @@ services:
     command:
       - "--insecure-listen-address=0.0.0.0:9155"
       - "--upstream=http://postfix_exporter:9154"
+      # ATENÇÃO: o formato obrigatório é --label=NOME=VALOR (com = entre nome e valor).
+      # Sem o = separador, o proxy não consegue parsear o label e responde HTTP 404.
       - "--label=cliente=${CLIENTE}"
     depends_on:
       - postfix_exporter
+    networks:
+      - monitoring_net
+
+networks:
+  monitoring_net:
