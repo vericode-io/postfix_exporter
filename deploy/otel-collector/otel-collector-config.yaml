@@ -1,30 +1,40 @@
 receivers:
-  # O receiver prometheus faz scrape (pull) de todos os postfix_exporters.
-  # IMPORTANTE: O alvo é a porta 9155 (prom-label-proxy), não 9154 diretamente.
-  # O proxy injeta a label "cliente" em todas as métricas antes de repassá-las.
+  # O receiver prometheus faz scrape (pull) de todos os postfix_exporters
+  # diretamente na porta 9154. A label "cliente" é injetada aqui via
+  # static_configs.labels — não é necessário nenhum proxy no servidor MX.
+  #
+  # COMO ADICIONAR UM NOVO SERVIDOR:
+  #   1. Adicione um novo bloco "- targets:" abaixo
+  #   2. Defina "cliente" com o nome do tenant dono do servidor
+  #   3. Reinicie o coletor: docker compose restart otel-collector
   prometheus:
     config:
       scrape_configs:
         - job_name: 'postfix_servers'
           scrape_interval: 15s
           static_configs:
-            # Cada entrada aponta para o prom-label-proxy do servidor MX.
-            # A label "cliente" já vem preenchida pelo proxy; adicione aqui
-            # apenas labels de infraestrutura (datacenter, role, etc.).
+            # ── Servidor MX 1 ──────────────────────────────────────────────
             - targets:
-                - '10.0.1.101:9155'
+                - '10.0.1.101:9154'
               labels:
+                cliente: 'acme-corp'
                 server_name: 'mx-primary'
                 datacenter: 'us-east'
+
+            # ── Servidor MX 2 ──────────────────────────────────────────────
             - targets:
-                - '10.0.1.102:9155'
+                - '10.0.1.102:9154'
               labels:
+                cliente: 'acme-corp'
                 server_name: 'mx-secondary'
                 datacenter: 'us-east'
+
+            # ── Servidor MX de outro cliente ───────────────────────────────
             - targets:
-                - '10.0.2.101:9155'
+                - '10.0.2.101:9154'
               labels:
-                server_name: 'mx-dr'
+                cliente: 'cliente-xyz'
+                server_name: 'mx-primary'
                 datacenter: 'eu-west'
 
 processors:

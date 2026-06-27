@@ -3,10 +3,8 @@ services:
     build: ../..
     restart: unless-stopped
     user: "root:root"
-    # Escuta apenas no loopback — o acesso externo é feito exclusivamente
-    # pelo label-proxy na porta 9155, que injeta a label "cliente".
     ports:
-      - "127.0.0.1:9154:9154"
+      - "9154:9154"
     volumes:
       # O exporter precisa ler o log do postfix e o socket do showq
       - /var/log/mail.log:/var/log/mail.log:ro
@@ -15,30 +13,18 @@ services:
       - "--web.listen-address=0.0.0.0:9154"
       - "--postfix.logfile_path=/var/log/mail.log"
       - "--postfix.showq_path=/var/spool/postfix/public/showq"
-    networks:
-      - monitoring_net
 
-  # O postfix_exporter não suporta labels customizados nativamente.
-  # O prom-label-proxy injeta a label "cliente" em todas as métricas
-  # ANTES de expô-las ao OTel Collector centralizado.
-  # O coletor central faz scrape na porta 9155 (proxy), não na 9154.
-  label-proxy:
-    image: quay.io/prometheuscommunity/prom-label-proxy:latest
-    restart: unless-stopped
-    ports:
-      - "9155:9155"
-    env_file:
-      - .env
-    command:
-      - "--insecure-listen-address=0.0.0.0:9155"
-      - "--upstream=http://postfix_exporter:9154"
-      # ATENÇÃO: o formato obrigatório é --label=NOME=VALOR (com = entre nome e valor).
-      # Sem o = separador, o proxy não consegue parsear o label e responde HTTP 404.
-      - "--label=cliente=${CLIENTE}"
-    depends_on:
-      - postfix_exporter
-    networks:
-      - monitoring_net
-
-networks:
-  monitoring_net:
+# NOTA: A label "cliente" NÃO é injetada aqui no servidor MX.
+# O prom-label-proxy não serve o endpoint /metrics — ele é um proxy de
+# queries PromQL (para Prometheus/Thanos) e não é adequado para este caso.
+#
+# A label "cliente" é injetada pelo OTel Collector centralizado via
+# static_configs.labels no otel-collector-config.yaml:
+#
+#   static_configs:
+#     - targets: ['IP_DESTE_MX:9154']
+#       labels:
+#         cliente: nome-do-cliente
+#
+# Isso garante que cada série temporal chegue ao Grafana Cloud com a
+# label correta sem nenhum componente extra neste servidor.
