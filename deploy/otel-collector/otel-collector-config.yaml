@@ -33,7 +33,7 @@ processors:
         action: upsert
 
 exporters:
-  otlphttp/grafana:
+  otlp_http/grafana:
     endpoint: "${GRAFANA_OTLP_ENDPOINT}"
     headers:
       Authorization: "Basic ${GRAFANA_OTLP_AUTH_BASE64}"
@@ -46,4 +46,4 @@ service:
     metrics:
       receivers: [prometheus]
       processors: [batch, resource]
-      exporters: [otlphttp/grafana, debug]
+      exporters: [otlp_http/grafana, debug]
