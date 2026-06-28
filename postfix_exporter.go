@@ -341,6 +341,10 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.cleanupProcesses.Inc()
 			} else if strings.Contains(remainder, ": reject: ") {
 				e.cleanupRejects.Inc()
+			} else if strings.HasPrefix(remainder, "warning: header ") {
+				// Header policy warnings (e.g. custom headers like hiperstream_sent_id).
+				// These are informational and counted as unsupported with level=warning.
+				e.addToUnsupportedLine(line, subprocess, level)
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
@@ -389,6 +393,18 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.smtpTLSConnects.WithLabelValues(smtpTLSMatches[1:]...).Inc()
 			} else if smtpMatches := smtpConnectionTimedOut.FindStringSubmatch(remainder); smtpMatches != nil {
 				e.smtpConnectionTimedOut.Inc()
+			} else if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
+				// Delivery lines without delays= field (e.g. remote server multi-line responses,
+				// lost connection while sending, host said: 421/550, etc.).
+				// Count the status but skip delay histograms (no timing data available).
+				e.smtpProcesses.WithLabelValues(smtpStatusMatches[1]).Inc()
+				if smtpStatusMatches[1] == "deferred" {
+					e.smtpStatusDeferred.Inc()
+				}
+			} else if strings.HasPrefix(remainder, "lost connection with ") {
+				// Outbound connection lost (e.g. while sending RCPT TO, DATA, etc.).
+				// Counted as a connection timeout for metric purposes.
+				e.smtpConnectionTimedOut.Inc()
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
@@ -425,6 +441,13 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.virtualDelivered.Inc()
 			} else {
 				e.addToUnsupportedLine(line, process, level)
+			}
+		case "discard":
+			// postfix/discard silently discards messages. Count sent status if present.
+			if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
+				e.smtpProcesses.WithLabelValues("discarded").Inc()
+			} else {
+				e.addToUnsupportedLine(line, subprocess, level)
 			}
 		default:
 			e.addToUnsupportedLine(line, subprocess, level)

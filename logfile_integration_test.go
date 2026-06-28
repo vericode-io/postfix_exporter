@@ -284,11 +284,14 @@ func TestNestedSubprocessAndISO8601Timestamp(t *testing.T) {
 		})
 	}
 
-	// Total de entregas smtp: deferred + sent + bounced (polite/smtp)
-	// + deferred (ultramegaturtle/smtp) + sent (syslog clássico/polite/smtp) = 5
-	// A linha postfix/discard não é mapeada para smtp, então não conta.
-	assert.Equal(t, 5.0, counterVecTotal(t, e.smtpProcesses),
-		"subprocessos aninhados (/polite/smtp, /ultramegaturtle/smtp) devem ser tratados como smtp")
+	// Total em smtpProcesses:
+	//   polite/smtp:        deferred + sent + bounced = 3
+	//   ultramegaturtle:    deferred                  = 1
+	//   syslog clássico:    sent                      = 1
+	//   discard:            discarded (status=sent)   = 1
+	// Total = 6
+	assert.Equal(t, 6.0, counterVecTotal(t, e.smtpProcesses),
+		"subprocessos aninhados e discard devem ser contados em smtpProcesses")
 }
 
 // TestOldTimestampsAreIgnored confirma explicitamente que o exporter
