@@ -45,19 +45,19 @@ type PostfixExporter struct {
 	logUnsupportedLines bool
 
 	// Metrics that should persist after refreshes, based on logs.
-	cleanupProcesses                prometheus.Counter
-	cleanupRejects                  prometheus.Counter
-	cleanupNotAccepted              prometheus.Counter
-	lmtpDelays                      *prometheus.HistogramVec
-	pipeDelays                      *prometheus.HistogramVec
-	qmgrInsertsNrcpt                prometheus.Histogram
-	qmgrInsertsSize                 prometheus.Histogram
-	qmgrRemoves                     prometheus.Counter
-	qmgrExpires                     prometheus.Counter
-	smtpDelays                      *prometheus.HistogramVec
-	smtpTLSConnects                 *prometheus.CounterVec
-	smtpConnectionTimedOut          prometheus.Counter
-	smtpProcesses                    *prometheus.CounterVec
+	cleanupProcesses       prometheus.Counter
+	cleanupRejects         prometheus.Counter
+	cleanupNotAccepted     prometheus.Counter
+	lmtpDelays             *prometheus.HistogramVec
+	pipeDelays             *prometheus.HistogramVec
+	qmgrInsertsNrcpt       prometheus.Histogram
+	qmgrInsertsSize        prometheus.Histogram
+	qmgrRemoves            prometheus.Counter
+	qmgrExpires            prometheus.Counter
+	smtpDelays             *prometheus.HistogramVec
+	smtpTLSConnects        *prometheus.CounterVec
+	smtpConnectionTimedOut prometheus.Counter
+	smtpProcesses          *prometheus.CounterVec
 	// should be the same as smtpProcesses{status=deferred}, kept for compatibility, but this doesn't work !
 	smtpDeferreds                   prometheus.Counter
 	smtpdConnects                   prometheus.Counter
@@ -70,10 +70,10 @@ type PostfixExporter struct {
 	smtpdTLSConnects                *prometheus.CounterVec
 	unsupportedLogEntries           *prometheus.CounterVec
 	// same as smtpProcesses{status=deferred}, kept for compatibility
-	smtpStatusDeferred              prometheus.Counter
-	opendkimSignatureAdded          *prometheus.CounterVec
-	bounceNonDelivery               prometheus.Counter
-	virtualDelivered                prometheus.Counter
+	smtpStatusDeferred     prometheus.Counter
+	opendkimSignatureAdded *prometheus.CounterVec
+	bounceNonDelivery      prometheus.Counter
+	virtualDelivered       prometheus.Counter
 }
 
 // A LogSource is an interface to read log lines.
@@ -297,8 +297,8 @@ var (
 	// - ISO 8601/journald: "2024-01-01T00:00:01.123-03:00 host postfix/smtp[1]: ..."
 	// Subprocess group supports nested queue names: postfix/polite/smtp, postfix/discard, etc.
 	// Capture groups: [1]=process [2]=full-subpath (e.g. /polite/smtp) [3]=last-component [4]=remainder [5]=level
-	logLine   = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
-	queueID   = regexp.MustCompile(`^[\w]+: `)
+	logLine                             = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
+	queueID                             = regexp.MustCompile(`^[\w]+: `)
 	lmtpPipeSMTPLine                    = regexp.MustCompile(`, relay=(\S+), .*, delays=([0-9\.]+)/([0-9\.]+)/([0-9\.]+)/([0-9\.]+), `)
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
@@ -405,9 +405,10 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				if smtpStatusMatches[1] == "deferred" {
 					e.smtpStatusDeferred.Inc()
 				}
-			} else if strings.HasPrefix(body, "lost connection with ") {
-				// Outbound connection lost (e.g. while sending RCPT TO, DATA, etc.).
-				// Counted as a connection timeout for metric purposes.
+			} else if strings.HasPrefix(body, "lost connection with ") ||
+				strings.Contains(body, " timed out while ") {
+				// Outbound connection lost or timed out (e.g. while sending RCPT TO,
+				// DATA, or receiving initial server greeting).
 				e.smtpConnectionTimedOut.Inc()
 			} else if strings.Contains(remainder, " refused to talk to me: ") ||
 				strings.Contains(remainder, " said: ") {
@@ -469,6 +470,13 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 			if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
 				e.smtpProcesses.WithLabelValues("discarded").Inc()
 			} else {
+				e.addToUnsupportedLine(line, subprocess, level)
+			}
+		case "scache":
+			// postfix/scache emits periodic statistics lines (start interval,
+			// domain lookup hits/miss, address lookup hits/miss).
+			// These are informational and intentionally not mapped to metrics.
+			if !strings.HasPrefix(body, "statistics: ") {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
 		default:
