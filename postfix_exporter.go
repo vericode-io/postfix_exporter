@@ -301,9 +301,9 @@ var (
 	lmtpPipeSMTPLine                    = regexp.MustCompile(`, relay=(\S+), .*, delays=([0-9\.]+)/([0-9\.]+)/([0-9\.]+)/([0-9\.]+), `)
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
-	smtpStatusLine                      = regexp.MustCompile(`, status=(\w+) `)
+	smtpStatusLine                      = regexp.MustCompile(`, status=(\w+)[ (]`)
 	smtpTLSLine                         = regexp.MustCompile(`^(\S+) TLS connection established to \S+: (\S+) with cipher (\S+) \((\d+)/(\d+) bits\)`)
-	smtpConnectionTimedOut              = regexp.MustCompile(`^connect\s+to\s+(.*)\[(.*)\]:(\d+):\s+(Connection timed out)$`)
+	smtpConnectionTimedOut              = regexp.MustCompile(`^connect\s+to\s+(.*)\[(.*)\]:(\d+):\s+(Connection timed out|Connection refused|No route to host|Network is unreachable)`)
 	smtpdFCrDNSErrorsLine               = regexp.MustCompile(`^warning: hostname \S+ does not resolve to address `)
 	smtpdProcessesSASLLine              = regexp.MustCompile(`: client=.*, sasl_method=(\S+)`)
 	smtpdRejectsLine                    = regexp.MustCompile(`^NOQUEUE: reject: RCPT from \S+: ([0-9]+) `)
@@ -405,6 +405,13 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				// Outbound connection lost (e.g. while sending RCPT TO, DATA, etc.).
 				// Counted as a connection timeout for metric purposes.
 				e.smtpConnectionTimedOut.Inc()
+			} else if strings.Contains(remainder, " refused to talk to me: ") ||
+				strings.Contains(remainder, " said: ") {
+				// Remote server rejection lines without a local status= field.
+				// These are intermediate log lines; the final status= appears in a
+				// subsequent line. Count as deferred for observability purposes.
+				e.smtpProcesses.WithLabelValues("deferred").Inc()
+				e.smtpStatusDeferred.Inc()
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
@@ -441,6 +448,17 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.virtualDelivered.Inc()
 			} else {
 				e.addToUnsupportedLine(line, process, level)
+			}
+		case "error":
+			// postfix/error handles delivery errors (e.g. delivery temporarily suspended).
+			// These lines always carry a status= field.
+			if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
+				e.smtpProcesses.WithLabelValues(smtpStatusMatches[1]).Inc()
+				if smtpStatusMatches[1] == "deferred" {
+					e.smtpStatusDeferred.Inc()
+				}
+			} else {
+				e.addToUnsupportedLine(line, subprocess, level)
 			}
 		case "discard":
 			// postfix/discard silently discards messages. Count sent status if present.

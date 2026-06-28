@@ -206,7 +206,10 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 					"Dec 29 03:03:48 mail postfix/smtp[8492]: 732BB407C3: to=<redacted@domain.com>, relay=mail.domain.com[1.1.1.1]:25, delay=582, delays=563/16/1.7/0.81, dsn=5.0.0, status=bounced (host mail.domain.com[1.1.1.1] said: 554 DT:SPM 163 mx9,O8CowEDJVFKCokVaRhz+AA--.26016S3 1514513028,please see http://mail.domain.com/help/help_spam.htm?ip= (in reply to end of DATA command))",
 					"Dec 29 03:03:48 mail postfix/bounce[9321]: 732BB407C3: sender non-delivery notification: 5DE184083C",
 				},
-				smtpMessagesProcessed:  2,
+				// Line 1: 'host said: 451' → deferred (no delays= field, new behaviour)
+				// Line 2: status=deferred with delays= → deferred
+				// Line 3: status=bounced with delays= → bounced
+				smtpMessagesProcessed:  3,
 				bounceNonDelivery: 1,
 			},
 			fields: fields{
