@@ -297,7 +297,8 @@ var (
 	// - ISO 8601/journald: "2024-01-01T00:00:01.123-03:00 host postfix/smtp[1]: ..."
 	// Subprocess group supports nested queue names: postfix/polite/smtp, postfix/discard, etc.
 	// Capture groups: [1]=process [2]=full-subpath (e.g. /polite/smtp) [3]=last-component [4]=remainder [5]=level
-	logLine = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
+	logLine   = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
+	queueID   = regexp.MustCompile(`^[\w]+: `)
 	lmtpPipeSMTPLine                    = regexp.MustCompile(`, relay=(\S+), .*, delays=([0-9\.]+)/([0-9\.]+)/([0-9\.]+)/([0-9\.]+), `)
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
@@ -327,6 +328,9 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 	process := logMatches[1]
 	level := logMatches[5]
 	remainder := logMatches[4]
+	// body is remainder with the optional "QUEUEID: " prefix stripped.
+	// HasPrefix/HasSuffix checks must use body; Contains/regex checks use remainder.
+	body := queueID.ReplaceAllString(remainder, "")
 	switch process {
 	case "postfix":
 		// Group patterns to check by Postfix service.
@@ -341,7 +345,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.cleanupProcesses.Inc()
 			} else if strings.Contains(remainder, ": reject: ") {
 				e.cleanupRejects.Inc()
-			} else if strings.HasPrefix(remainder, "warning: header ") {
+			} else if strings.HasPrefix(body, "warning: header ") {
 				// Header policy warnings (e.g. custom headers like hiperstream_sent_id).
 				// These are informational and counted as unsupported with level=warning.
 				e.addToUnsupportedLine(line, subprocess, level)
@@ -370,7 +374,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 			if qmgrInsertMatches := qmgrInsertLine.FindStringSubmatch(remainder); qmgrInsertMatches != nil {
 				addToHistogram(e.qmgrInsertsSize, qmgrInsertMatches[1], "QMGR size")
 				addToHistogram(e.qmgrInsertsNrcpt, qmgrInsertMatches[2], "QMGR nrcpt")
-			} else if strings.HasSuffix(remainder, ": removed") {
+			} else if strings.HasSuffix(body, "removed") {
 				e.qmgrRemoves.Inc()
 			} else if qmgrExpired := qmgrExpiredLine.FindStringSubmatch(remainder); qmgrExpired != nil {
 				e.qmgrExpires.Inc()
@@ -389,9 +393,9 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 						e.smtpStatusDeferred.Inc()
 					}
 				}
-			} else if smtpTLSMatches := smtpTLSLine.FindStringSubmatch(remainder); smtpTLSMatches != nil {
+			} else if smtpTLSMatches := smtpTLSLine.FindStringSubmatch(body); smtpTLSMatches != nil {
 				e.smtpTLSConnects.WithLabelValues(smtpTLSMatches[1:]...).Inc()
-			} else if smtpMatches := smtpConnectionTimedOut.FindStringSubmatch(remainder); smtpMatches != nil {
+			} else if smtpMatches := smtpConnectionTimedOut.FindStringSubmatch(body); smtpMatches != nil {
 				e.smtpConnectionTimedOut.Inc()
 			} else if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
 				// Delivery lines without delays= field (e.g. remote server multi-line responses,
@@ -401,7 +405,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				if smtpStatusMatches[1] == "deferred" {
 					e.smtpStatusDeferred.Inc()
 				}
-			} else if strings.HasPrefix(remainder, "lost connection with ") {
+			} else if strings.HasPrefix(body, "lost connection with ") {
 				// Outbound connection lost (e.g. while sending RCPT TO, DATA, etc.).
 				// Counted as a connection timeout for metric purposes.
 				e.smtpConnectionTimedOut.Inc()
@@ -416,9 +420,9 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
 		case "smtpd":
-			if strings.HasPrefix(remainder, "connect from ") {
+			if strings.HasPrefix(body, "connect from ") {
 				e.smtpdConnects.Inc()
-			} else if strings.HasPrefix(remainder, "disconnect from ") {
+			} else if strings.HasPrefix(body, "disconnect from ") {
 				e.smtpdDisconnects.Inc()
 			} else if smtpdFCrDNSErrorsLine.MatchString(remainder) {
 				e.smtpdFCrDNSErrors.Inc()
@@ -444,7 +448,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				e.addToUnsupportedLine(line, process, level)
 			}
 		case "virtual":
-			if strings.HasSuffix(remainder, ", status=sent (delivered to maildir)") {
+			if strings.HasSuffix(body, "status=sent (delivered to maildir)") {
 				e.virtualDelivered.Inc()
 			} else {
 				e.addToUnsupportedLine(line, process, level)
