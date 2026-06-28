@@ -292,7 +292,12 @@ func CollectShowqFromSocket(path string, ch chan<- prometheus.Metric) error {
 
 // Patterns for parsing log messages.
 var (
-	logLine                             = regexp.MustCompile(` ?(postfix|opendkim)(/(\w+))?\[\d+\]: ((?:(warning|error|fatal|panic): )?.*)`)
+	// logLine matches Postfix/OpenDKIM log entries in two timestamp formats:
+	// - Syslog RFC 3164:  "Jan  1 00:00:01 host postfix/smtp[1]: ..."
+	// - ISO 8601/journald: "2024-01-01T00:00:01.123-03:00 host postfix/smtp[1]: ..."
+	// Subprocess group supports nested queue names: postfix/polite/smtp, postfix/discard, etc.
+	// Capture groups: [1]=process [2]=full-subpath (e.g. /polite/smtp) [3]=last-component [4]=remainder [5]=level
+	logLine = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
 	lmtpPipeSMTPLine                    = regexp.MustCompile(`, relay=(\S+), .*, delays=([0-9\.]+)/([0-9\.]+)/([0-9\.]+)/([0-9\.]+), `)
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
@@ -325,7 +330,11 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 	switch process {
 	case "postfix":
 		// Group patterns to check by Postfix service.
-		subprocess := logMatches[3]
+		// logMatches[2] contains the full subpath (e.g. "/polite/smtp").
+		// We extract the last component to identify the Postfix service.
+		subpathFull := strings.TrimPrefix(logMatches[2], "/")
+		parts := strings.Split(subpathFull, "/")
+		subprocess := parts[len(parts)-1]
 		switch subprocess {
 		case "cleanup":
 			if strings.Contains(remainder, ": message-id=<") {

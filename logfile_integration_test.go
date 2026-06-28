@@ -251,6 +251,46 @@ func TestCollectFromRealLogFile(t *testing.T) {
 // Teste de regressão: timestamps antigos não afetam o parsing
 // ---------------------------------------------------------------------------
 
+// TestNestedSubprocessAndISO8601Timestamp valida o suporte a subprocessos aninhados
+// (postfix/polite/smtp, postfix/discard, etc.) e ao formato de timestamp ISO 8601
+// gerado pelo journald/rsyslog moderno, como encontrado nos logs reais do cliente.
+func TestNestedSubprocessAndISO8601Timestamp(t *testing.T) {
+	e := newTestExporter(t)
+
+	// Linhas com timestamp ISO 8601 e subprocessos aninhados (do log real)
+	lines := []struct {
+		line    string
+		desc    string
+	}{
+		// postfix/polite/smtp → deve ser tratado como smtp (último componente)
+		{`2026-06-14T18:08:39.620674-03:00 mx3 postfix/polite/smtp[107825]: 4gdgQw15: to=<a@gmail.com>, relay=alt1.gmail-smtp-in.l.google.com[1.2.3.4]:25, delay=12736, delays=802/11925/7/1.7, dsn=4.7.23, status=deferred (host said: 421 rate limited)`, "ISO8601 + polite/smtp deferred"},
+		{`2026-06-14T18:08:39.690814-03:00 mx3 postfix/polite/smtp[107846]: 4gdfJL6: to=<b@gmail.com>, relay=gmail-smtp-in.l.google.com[1.2.3.4]:25, delay=15782, delays=3848/11930/1/2.8, dsn=2.0.0, status=sent (250 OK)`, "ISO8601 + polite/smtp sent"},
+		{`2026-06-14T18:08:39.844812-03:00 mx3 postfix/polite/smtp[107967]: 4gdgYd: to=<c@gmail.com>, relay=gmail-smtp-in.l.google.com[1.2.3.4]:25, delay=12387, delays=452/11929/1.1/4.4, dsn=5.7.1, status=bounced (host said: 550 spam)`, "ISO8601 + polite/smtp bounced"},
+		// postfix/ultramegaturtle/smtp → deve ser tratado como smtp
+		{`2026-06-14T18:08:40.631989-03:00 mx3 postfix/ultramegaturtle/smtp[107960]: 4gddZV: to=<d@uol.com.br>, relay=mx.uol.com.br[1.2.3.4]:25, delay=17751, delays=14956/2792/2.1/0.54, dsn=4.7.1, status=deferred (blacklisted)`, "ISO8601 + ultramegaturtle/smtp"},
+		// postfix/discard → subprocess = discard (não mapeado → unsupported, mas não deve crashar)
+		{`2026-06-14T18:08:40.293232-03:00 mx3 postfix/discard[107974]: 4gcYdn: to=<e@faturaporto.com.br>, relay=none, delay=169002, delays=0.01/169002/0/0, dsn=2.0.0, status=sent (faturaporto.com.br)`, "ISO8601 + discard"},
+		// Timestamp syslog clássico com subprocesso aninhado
+		{`Jun 14 18:08:39 mx3 postfix/polite/smtp[107825]: 4gdgQw15: to=<f@gmail.com>, relay=alt1.gmail-smtp-in.l.google.com[1.2.3.4]:25, delay=100, delays=10/80/5/5, dsn=2.0.0, status=sent (250 OK)`, "syslog clássico + polite/smtp"},
+	}
+
+	for _, tc := range lines {
+		t.Run(tc.desc, func(t *testing.T) {
+			// O teste apenas verifica que a linha não causa panic e é processada
+			// (seja como métrica reconhecida ou como unsupported — nunca como crash)
+			assert.NotPanics(t, func() {
+				e.CollectFromLogLine(tc.line)
+			})
+		})
+	}
+
+	// Total de entregas smtp: deferred + sent + bounced (polite/smtp)
+	// + deferred (ultramegaturtle/smtp) + sent (syslog clássico/polite/smtp) = 5
+	// A linha postfix/discard não é mapeada para smtp, então não conta.
+	assert.Equal(t, 5.0, counterVecTotal(t, e.smtpProcesses),
+		"subprocessos aninhados (/polite/smtp, /ultramegaturtle/smtp) devem ser tratados como smtp")
+}
+
 // TestOldTimestampsAreIgnored confirma explicitamente que o exporter
 // processa linhas com timestamps de anos passados da mesma forma que
 // linhas com timestamps atuais.
