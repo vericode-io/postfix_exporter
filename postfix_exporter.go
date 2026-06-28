@@ -297,8 +297,10 @@ var (
 	// - ISO 8601/journald: "2024-01-01T00:00:01.123-03:00 host postfix/smtp[1]: ..."
 	// Subprocess group supports nested queue names: postfix/polite/smtp, postfix/discard, etc.
 	// Capture groups: [1]=process [2]=full-subpath (e.g. /polite/smtp) [3]=last-component [4]=remainder [5]=level
-	logLine                             = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
-	queueID                             = regexp.MustCompile(`^[\w]+: `)
+	logLine = regexp.MustCompile(` ?(postfix|opendkim)((?:/[\w-]+)+)?\[(\d+)\]: ((?:(warning|error|fatal|panic): )?.*)`)
+	// queueIDPrefix matches the "QUEUEID: " prefix at the start of a remainder string.
+	// Used by stripQueueID to extract the message body without the queue ID.
+	queueIDPrefix                       = regexp.MustCompile(`^([A-Za-z0-9]{6,}): `)
 	lmtpPipeSMTPLine                    = regexp.MustCompile(`, relay=(\S+), .*, delays=([0-9\.]+)/([0-9\.]+)/([0-9\.]+)/([0-9\.]+), `)
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
@@ -315,6 +317,33 @@ var (
 	bounceNonDeliveryLine               = regexp.MustCompile(`: sender non-delivery notification: `)
 )
 
+// stripQueueID removes the "QUEUEID: " prefix from a Postfix log remainder string,
+// returning the message body. Postfix queue IDs always contain at least one digit
+// AND at least one uppercase letter (e.g. "4gddKC5qmdz58PR", "4gcXjH").
+// Keyword prefixes like "statistics:", "warning:", "fatal:", "NOQUEUE:" are NOT stripped
+// because they lack a digit or an uppercase letter respectively.
+func stripQueueID(remainder string) string {
+	m := queueIDPrefix.FindStringSubmatch(remainder)
+	if m == nil {
+		return remainder
+	}
+	candidate := m[1]
+	hasDigit := false
+	hasUpper := false
+	for _, c := range candidate {
+		if c >= '0' && c <= '9' {
+			hasDigit = true
+		}
+		if c >= 'A' && c <= 'Z' {
+			hasUpper = true
+		}
+	}
+	if hasDigit && hasUpper {
+		return remainder[len(m[0]):]
+	}
+	return remainder
+}
+
 // CollectFromLogline collects metrict from a Postfix log line.
 func (e *PostfixExporter) CollectFromLogLine(line string) {
 	// Strip off timestamp, hostname, etc.
@@ -330,7 +359,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 	remainder := logMatches[4]
 	// body is remainder with the optional "QUEUEID: " prefix stripped.
 	// HasPrefix/HasSuffix checks must use body; Contains/regex checks use remainder.
-	body := queueID.ReplaceAllString(remainder, "")
+	body := stripQueueID(remainder)
 	switch process {
 	case "postfix":
 		// Group patterns to check by Postfix service.
