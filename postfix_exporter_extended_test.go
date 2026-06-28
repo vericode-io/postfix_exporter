@@ -152,6 +152,37 @@ func TestCollectFromLogLine_SmtpConnectionTimedOut(t *testing.T) {
 	assert.Equal(t, 1.0, counterValue(t, e.smtpConnectionTimedOut))
 }
 
+func TestCollectFromLogLine_SmtpConnectionReset_RcptTo(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server (Outlook/Hotmail) actively dropped the connection during RCPT TO
+	e.CollectFromLogLine("2026-06-14T13:37:31.082923-03:00 mx3 postfix/megaturtle/smtp[94965]: 4gddkg5ncrz51v5: lost connection with outlook-com.olc.protection.OUTLOOK.COM[52.101.137.1] while sending RCPT TO")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as timed out")
+}
+
+func TestCollectFromLogLine_SmtpConnectionReset_Data(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server dropped connection while sending DATA
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: lost connection with mx.example.com[1.2.3.4] while sending DATA")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+}
+
+func TestCollectFromLogLine_SmtpConnectionReset_Greeting(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server accepted TCP but stalled before sending SMTP banner
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: lost connection with mx.example.com[1.2.3.4] while receiving the initial server greeting")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "greeting reset should NOT count as timed out")
+}
+
+func TestCollectFromLogLine_SmtpConnectionTimedOut_Conversation(t *testing.T) {
+	e := newTestExporter(t)
+	// Conversation timed out (different from active reset — no 'lost connection with')
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: conversation with mx.huawei.com[1.2.3.4] timed out while receiving the initial server greeting")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpConnectionTimedOut))
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpConnectionReset), "conversation timeout should NOT count as reset")
+}
+
 func TestCollectFromLogLine_SmtpTLSOutgoing(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: Verified TLS connection established to mx.example.com[1.2.3.4]:25: TLSv1.3 with cipher TLS_AES_256_GCM_SHA384 (256/256 bits)")

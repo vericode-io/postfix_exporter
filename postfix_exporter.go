@@ -57,6 +57,7 @@ type PostfixExporter struct {
 	smtpDelays             *prometheus.HistogramVec
 	smtpTLSConnects        *prometheus.CounterVec
 	smtpConnectionTimedOut prometheus.Counter
+	smtpConnectionReset    *prometheus.CounterVec
 	smtpProcesses          *prometheus.CounterVec
 	// should be the same as smtpProcesses{status=deferred}, kept for compatibility, but this doesn't work !
 	smtpDeferreds                   prometheus.Counter
@@ -307,6 +308,7 @@ var (
 	smtpStatusLine                      = regexp.MustCompile(`, status=(\w+)[ (]`)
 	smtpTLSLine                         = regexp.MustCompile(`^(\S+) TLS connection established to \S+: (\S+) with cipher (\S+) \((\d+)/(\d+) bits\)`)
 	smtpConnectionTimedOut              = regexp.MustCompile(`^connect\s+to\s+(.*)\[(.*)\]:(\d+):\s+(Connection timed out|Connection refused|No route to host|Network is unreachable)`)
+	smtpLostConnectionLine              = regexp.MustCompile(`^lost connection with \S+ while (?:sending|receiving the initial server) (\S+)`)
 	smtpdFCrDNSErrorsLine               = regexp.MustCompile(`^warning: hostname \S+ does not resolve to address `)
 	smtpdProcessesSASLLine              = regexp.MustCompile(`: client=.*, sasl_method=(\S+)`)
 	smtpdRejectsLine                    = regexp.MustCompile(`^NOQUEUE: reject: RCPT from \S+: ([0-9]+) `)
@@ -322,26 +324,34 @@ var (
 // AND at least one uppercase letter (e.g. "4gddKC5qmdz58PR", "4gcXjH").
 // Keyword prefixes like "statistics:", "warning:", "fatal:", "NOQUEUE:" are NOT stripped
 // because they lack a digit or an uppercase letter respectively.
+// reservedLogWords are words that appear before ": " in Postfix log lines but are NOT queue IDs.
+// Queue IDs are alphanumeric tokens of at least 6 characters that are not reserved words.
+var reservedLogWords = map[string]bool{
+	"warning": true, "statistics": true, "fatal": true, "panic": true,
+	"error": true, "info": true, "notice": true, "noqueue": true,
+	"connect": true, "disconnect": true, "timeout": true, "reject": true,
+}
+
 func stripQueueID(remainder string) string {
 	m := queueIDPrefix.FindStringSubmatch(remainder)
 	if m == nil {
 		return remainder
 	}
 	candidate := m[1]
-	hasDigit := false
-	hasUpper := false
+	// Queue IDs are alphanumeric, at least 6 chars, and not a reserved log word.
+	if len(candidate) < 6 {
+		return remainder
+	}
+	if reservedLogWords[strings.ToLower(candidate)] {
+		return remainder
+	}
+	// Ensure candidate is purely alphanumeric (no dots, dashes, etc.)
 	for _, c := range candidate {
-		if c >= '0' && c <= '9' {
-			hasDigit = true
-		}
-		if c >= 'A' && c <= 'Z' {
-			hasUpper = true
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+			return remainder
 		}
 	}
-	if hasDigit && hasUpper {
-		return remainder[len(m[0]):]
-	}
-	return remainder
+	return remainder[len(m[0]):]
 }
 
 // CollectFromLogline collects metrict from a Postfix log line.
@@ -434,10 +444,17 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				if smtpStatusMatches[1] == "deferred" {
 					e.smtpStatusDeferred.Inc()
 				}
-			} else if strings.HasPrefix(body, "lost connection with ") ||
-				strings.Contains(body, " timed out while ") {
-				// Outbound connection lost or timed out (e.g. while sending RCPT TO,
-				// DATA, or receiving initial server greeting).
+			} else if lostConnMatches := smtpLostConnectionLine.FindStringSubmatch(body); lostConnMatches != nil {
+				// Remote server actively reset the connection during an SMTP stage.
+				// lostConnMatches[1] is the last token of the stage (e.g. "RCPT", "DATA", "greeting").
+				stage := strings.ToUpper(lostConnMatches[1])
+				// Normalise "greeting" (from "receiving the initial server greeting")
+				if stage == "GREETING" {
+					stage = "GREETING"
+				}
+				e.smtpConnectionReset.WithLabelValues(stage).Inc()
+			} else if strings.Contains(body, " timed out while ") {
+				// Conversation timed out (remote accepted TCP but never sent banner or stalled mid-session).
 				e.smtpConnectionTimedOut.Inc()
 			} else if strings.Contains(remainder, " refused to talk to me: ") ||
 				strings.Contains(remainder, " said: ") {
@@ -633,11 +650,18 @@ func NewPostfixExporter(showqPath string, logSrc LogSource, logUnsupportedLines 
 				Help:      "Total number of messages that have been processed by the smtp process.",
 			},
 			[]string{"status"}),
-		smtpConnectionTimedOut: prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "postfix",
-			Name:      "smtp_connection_timed_out_total",
-			Help:      "Total number of messages that have been deferred on SMTP.",
-		}),
+			smtpConnectionTimedOut: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "postfix",
+				Name:      "smtp_connection_timed_out_total",
+				Help:      "Total number of outbound connections that timed out or were refused (connect-level failures).",
+			}),
+			smtpConnectionReset: prometheus.NewCounterVec(
+				prometheus.CounterOpts{
+					Namespace: "postfix",
+					Name:      "smtp_connection_reset_total",
+					Help:      "Total number of outbound connections actively reset by the remote server, by SMTP stage.",
+				},
+				[]string{"stage"}),
 		smtpdConnects: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "postfix",
 			Name:      "smtpd_connects_total",
@@ -750,6 +774,7 @@ func (e *PostfixExporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.smtpStatusDeferred.Desc()
 	e.unsupportedLogEntries.Describe(ch)
 	e.smtpConnectionTimedOut.Describe(ch)
+	e.smtpConnectionReset.Describe(ch)
 	e.opendkimSignatureAdded.Describe(ch)
 	ch <- e.bounceNonDelivery.Desc()
 	ch <- e.virtualDelivered.Desc()
@@ -829,6 +854,7 @@ func (e *PostfixExporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.smtpStatusDeferred
 	e.unsupportedLogEntries.Collect(ch)
 	ch <- e.smtpConnectionTimedOut
+	e.smtpConnectionReset.Collect(ch)
 	e.opendkimSignatureAdded.Collect(ch)
 	ch <- e.bounceNonDelivery
 	ch <- e.virtualDelivered
