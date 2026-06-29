@@ -333,6 +333,7 @@ var reservedLogWords = map[string]bool{
 	"warning": true, "statistics": true, "fatal": true, "panic": true,
 	"error": true, "info": true, "notice": true, "noqueue": true,
 	"connect": true, "disconnect": true, "timeout": true, "reject": true,
+	"ssl_connect": true, "refused": true,
 }
 
 func stripQueueID(remainder string) string {
@@ -463,6 +464,16 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				// These are intermediate log lines; the final status= appears in a
 				// subsequent line. Count as deferred for observability purposes.
 				e.recordSMTPProcess("deferred", remainder)
+			} else if strings.HasPrefix(body, "SSL_connect error to ") {
+				// SSL/TLS connection error at the socket level (e.g. lost connection
+				// during TLS negotiation with Gmail). The delivery will be retried
+				// and a status=deferred line will follow. Count as TLS handshake failure.
+				e.smtpTLSHandshakeFailures.Inc()
+			} else if strings.HasPrefix(body, "warning: no MX host for ") {
+				// DNS resolution warning: no valid address record for any MX host.
+				// Informational — the delivery will be retried or bounced separately.
+				// Count as unsupported-warning so it doesn't pollute the error rate.
+				e.addToUnsupportedLine(line, subprocess, "warning")
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}

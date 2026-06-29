@@ -213,6 +213,25 @@ func TestCollectFromLogLine_SmtpTLSHandshakeFailure_Classic(t *testing.T) {
 	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
 }
 
+func TestCollectFromLogLine_SmtpSSLConnectError(t *testing.T) {
+	e := newTestExporter(t)
+	// SSL_connect error: socket-level TLS failure (no queue ID prefix)
+	e.CollectFromLogLine("2026-06-16T16:34:16.452301-03:00 PostfixCSUPorto postfix/polite/smtp[4265]: SSL_connect error to gmail-smtp-in.l.google.COM[142.251.0.27]:25: lost connection")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpTLSHandshakeFailures), "SSL_connect error should count as TLS handshake failure")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
+
+func TestCollectFromLogLine_SmtpNoMXHost(t *testing.T) {
+	e := newTestExporter(t)
+	// warning: no MX host — DNS resolution warning, counted as warning (not error)
+	e.CollectFromLogLine("2026-06-16T16:47:57.688188-03:00 PostfixCSUPorto postfix/smtp[11767]: warning: no MX host for hotmai.com has a valid address record")
+	// Should NOT be counted as an unsupported line with level="" (unknown)
+	// It IS counted as a warning-level unsupported entry, which is acceptable
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as timed out")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpConnectionReset), "should NOT count as connection reset")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpProcesses), "should NOT count as a delivery")
+}
+
 func TestCollectFromLogLine_SmtpdConnect(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtpd[1234]: connect from client.example.com[1.2.3.4]")
