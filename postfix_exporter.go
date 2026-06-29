@@ -311,7 +311,13 @@ var (
 	smtpDSNLine                         = regexp.MustCompile(`, dsn=([^, ]+)`)
 	smtpTLSLine                         = regexp.MustCompile(`^(\S+) TLS connection established to \S+: (\S+) with cipher (\S+) \((\d+)/(\d+) bits\)`)
 	smtpConnectionTimedOut              = regexp.MustCompile(`^connect\s+to\s+(.*)\[(.*)\]:(\d+):\s+(Connection timed out|Connection refused|No route to host|Network is unreachable)`)
-	smtpLostConnectionLine              = regexp.MustCompile(`^lost connection with \S+ while (?:sending|receiving the initial server) (\S+)`)
+	// smtpLostConnectionLine matches 'lost connection with <host> while <stage>'.
+	// Supported stage variants:
+	//   - "while sending RCPT TO"          → stage = RCPT
+	//   - "while sending DATA"              → stage = DATA
+	//   - "while receiving the initial server greeting" → stage = GREETING
+	//   - "while performing the EHLO handshake"         → stage = EHLO
+	smtpLostConnectionLine              = regexp.MustCompile(`^lost connection with \S+ while (?:sending|receiving the initial server|performing the) (\S+)`)
 	smtpdFCrDNSErrorsLine               = regexp.MustCompile(`^warning: hostname \S+ does not resolve to address `)
 	smtpdProcessesSASLLine              = regexp.MustCompile(`: client=.*, sasl_method=(\S+)`)
 	smtpdRejectsLine                    = regexp.MustCompile(`^NOQUEUE: reject: RCPT from \S+: ([0-9]+) `)

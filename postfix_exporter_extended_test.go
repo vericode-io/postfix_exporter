@@ -177,6 +177,15 @@ func TestCollectFromLogLine_SmtpConnectionReset_Greeting(t *testing.T) {
 	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "greeting reset should NOT count as timed out")
 }
 
+func TestCollectFromLogLine_SmtpConnectionReset_EHLO(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server dropped connection during EHLO handshake (real production line from Gmail)
+	e.CollectFromLogLine("2026-06-16T18:29:57.429390-03:00 PostfixCSUPorto postfix/polite/smtp[95724]: 4gg0TZ6CfRz4yp6: lost connection with gmail-smtp-in.l.google.com[142.251.0.26] while performing the EHLO handshake")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset), "EHLO handshake reset should count as connection reset")
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as timed out")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
+
 func TestCollectFromLogLine_SmtpConnectionTimedOut_Conversation(t *testing.T) {
 	e := newTestExporter(t)
 	// Conversation timed out (different from active reset — no 'lost connection with')
