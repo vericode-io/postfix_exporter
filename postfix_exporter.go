@@ -55,9 +55,10 @@ type PostfixExporter struct {
 	qmgrRemoves            prometheus.Counter
 	qmgrExpires            prometheus.Counter
 	smtpDelays             *prometheus.HistogramVec
-	smtpTLSConnects        *prometheus.CounterVec
-	smtpConnectionTimedOut prometheus.Counter
-	smtpConnectionReset    *prometheus.CounterVec
+	smtpTLSConnects           *prometheus.CounterVec
+	smtpTLSHandshakeFailures  prometheus.Counter
+	smtpConnectionTimedOut    prometheus.Counter
+	smtpConnectionReset       *prometheus.CounterVec
 	smtpProcesses          *prometheus.CounterVec
 	// should be the same as smtpProcesses{status=deferred}, kept for compatibility, but this doesn't work !
 	smtpDeferreds                   prometheus.Counter
@@ -434,6 +435,10 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				}
 			} else if smtpTLSMatches := smtpTLSLine.FindStringSubmatch(body); smtpTLSMatches != nil {
 				e.smtpTLSConnects.WithLabelValues(smtpTLSMatches[1:]...).Inc()
+			} else if strings.HasPrefix(body, "Cannot start TLS") {
+				// TLS handshake failed before any message was transferred.
+				// The delivery will be retried (deferred) or bounced in a subsequent log line.
+				e.smtpTLSHandshakeFailures.Inc()
 			} else if smtpMatches := smtpConnectionTimedOut.FindStringSubmatch(body); smtpMatches != nil {
 				e.smtpConnectionTimedOut.Inc()
 			} else if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
@@ -650,6 +655,11 @@ func NewPostfixExporter(showqPath string, logSrc LogSource, logUnsupportedLines 
 				Help:      "Total number of messages that have been processed by the smtp process.",
 			},
 			[]string{"status"}),
+			smtpTLSHandshakeFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "postfix",
+				Name:      "smtp_tls_handshake_failures_total",
+				Help:      "Total number of outbound TLS handshake failures (Cannot start TLS).",
+			}),
 			smtpConnectionTimedOut: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "postfix",
 				Name:      "smtp_connection_timed_out_total",
@@ -774,6 +784,7 @@ func (e *PostfixExporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.smtpStatusDeferred.Desc()
 	e.unsupportedLogEntries.Describe(ch)
 	e.smtpConnectionTimedOut.Describe(ch)
+	ch <- e.smtpTLSHandshakeFailures.Desc()
 	e.smtpConnectionReset.Describe(ch)
 	e.opendkimSignatureAdded.Describe(ch)
 	ch <- e.bounceNonDelivery.Desc()
@@ -854,6 +865,7 @@ func (e *PostfixExporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.smtpStatusDeferred
 	e.unsupportedLogEntries.Collect(ch)
 	ch <- e.smtpConnectionTimedOut
+	ch <- e.smtpTLSHandshakeFailures
 	e.smtpConnectionReset.Collect(ch)
 	e.opendkimSignatureAdded.Collect(ch)
 	ch <- e.bounceNonDelivery

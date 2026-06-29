@@ -193,6 +193,24 @@ func TestCollectFromLogLine_SmtpTLSOutgoing(t *testing.T) {
 // Testes de CollectFromLogLine — smtpd (incoming)
 // ---------------------------------------------------------------------------
 
+func TestCollectFromLogLine_SmtpTLSHandshakeFailure(t *testing.T) {
+	e := newTestExporter(t)
+	// Real production line: TLS handshake failed on nested subprocess (polite/smtp)
+	e.CollectFromLogLine("2026-06-16T17:18:31.925885-03:00 PostfixCSUPorto postfix/polite/smtp[35821]: 4gfyry6Qhcz4ydk: Cannot start TLS: handshake failure")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpTLSHandshakeFailures), "should count TLS handshake failure")
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as connection timed out")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpConnectionReset), "should NOT count as connection reset")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
+
+func TestCollectFromLogLine_SmtpTLSHandshakeFailure_Classic(t *testing.T) {
+	e := newTestExporter(t)
+	// Classic syslog timestamp format
+	e.CollectFromLogLine("Jun 16 17:18:31 mail postfix/smtp[35821]: AABBCC: Cannot start TLS: handshake failure")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpTLSHandshakeFailures))
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
+
 func TestCollectFromLogLine_SmtpdConnect(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtpd[1234]: connect from client.example.com[1.2.3.4]")
