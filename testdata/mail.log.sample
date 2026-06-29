@@ -1,0 +1,17 @@
+# Arquivo de exemplo — substitua pelo seu mail.log real.
+# O exporter ignora o timestamp (campo 1) e o hostname (campo 2),
+# portanto logs com datas antigas funcionam exatamente como logs recentes.
+#
+# Formato esperado pelo Postfix:
+#   Jan  1 00:00:01 hostname postfix/subprocess[pid]: mensagem
+#
+Jan  1 00:00:01 mx1 postfix/cleanup[1001]: ABC123: message-id=<test@example.com>
+Jan  1 00:00:02 mx1 postfix/qmgr[1002]: ABC123: from=<sender@example.com>, size=1234, nrcpt=1 (queue active)
+Jan  1 00:00:03 mx1 postfix/smtp[1003]: ABC123: to=<rcpt@example.com>, relay=mail.example.com[1.2.3.4]:25, delay=0.5, delays=0.1/0.1/0.1/0.2, dsn=2.0.0, status=sent (250 OK)
+Jan  1 00:00:04 mx1 postfix/qmgr[1002]: ABC123: removed
+Jan  1 00:00:05 mx1 postfix/smtpd[1004]: connect from unknown[1.2.3.4]
+Jan  1 00:00:06 mx1 postfix/smtpd[1004]: disconnect from unknown[1.2.3.4] ehlo=1 mail=1 rcpt=1 data=1 quit=1 commands=5
+Jan  1 00:00:07 mx1 postfix/smtpd[1004]: NOQUEUE: reject: RCPT from unknown[1.2.3.4]: 550 5.1.1 <bad@example.com>: Recipient address rejected; from=<sender@example.com> to=<bad@example.com> proto=ESMTP helo=<mail.example.com>
+Jan  1 00:00:08 mx1 postfix/bounce[1005]: DEF456: sender non-delivery notification: GHI789
+Jan  1 00:00:09 mx1 postfix/virtual[1006]: JKL012: to=<user@example.com>, relay=virtual, delay=0.1, delays=0.1/0/0/0, dsn=2.0.0, status=sent (delivered to maildir)
+Jan  1 00:00:10 mx1 opendkim[1007]: MNO345: DKIM-Signature field added (s=default, d=example.com)

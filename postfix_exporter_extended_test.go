@@ -137,6 +137,7 @@ func TestCollectFromLogLine_SmtpSent(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: to=<rcpt@example.com>, relay=mx.example.com[1.2.3.4]:25, delay=1.0, delays=0.1/0.2/0.3/0.4, dsn=2.0.0, status=sent (250 OK)")
 	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcesses))
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcessesByDSN))
 }
 
 func TestCollectFromLogLine_SmtpDeferred(t *testing.T) {
@@ -144,12 +145,44 @@ func TestCollectFromLogLine_SmtpDeferred(t *testing.T) {
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: to=<rcpt@example.com>, relay=mx.example.com[1.2.3.4]:25, delay=1.0, delays=0.1/0.2/0.3/0.4, dsn=4.0.0, status=deferred (connection refused)")
 	assert.Equal(t, 1.0, counterValue(t, e.smtpStatusDeferred))
 	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcesses))
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcessesByDSN))
 }
 
 func TestCollectFromLogLine_SmtpConnectionTimedOut(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: connect to mx.example.com[1.2.3.4]:25: Connection timed out")
 	assert.Equal(t, 1.0, counterValue(t, e.smtpConnectionTimedOut))
+}
+
+func TestCollectFromLogLine_SmtpConnectionReset_RcptTo(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server (Outlook/Hotmail) actively dropped the connection during RCPT TO
+	e.CollectFromLogLine("2026-06-14T13:37:31.082923-03:00 mx3 postfix/megaturtle/smtp[94965]: 4gddkg5ncrz51v5: lost connection with outlook-com.olc.protection.OUTLOOK.COM[52.101.137.1] while sending RCPT TO")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as timed out")
+}
+
+func TestCollectFromLogLine_SmtpConnectionReset_Data(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server dropped connection while sending DATA
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: lost connection with mx.example.com[1.2.3.4] while sending DATA")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+}
+
+func TestCollectFromLogLine_SmtpConnectionReset_Greeting(t *testing.T) {
+	e := newTestExporter(t)
+	// Remote server accepted TCP but stalled before sending SMTP banner
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: lost connection with mx.example.com[1.2.3.4] while receiving the initial server greeting")
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpConnectionReset))
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "greeting reset should NOT count as timed out")
+}
+
+func TestCollectFromLogLine_SmtpConnectionTimedOut_Conversation(t *testing.T) {
+	e := newTestExporter(t)
+	// Conversation timed out (different from active reset — no 'lost connection with')
+	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: conversation with mx.huawei.com[1.2.3.4] timed out while receiving the initial server greeting")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpConnectionTimedOut))
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpConnectionReset), "conversation timeout should NOT count as reset")
 }
 
 func TestCollectFromLogLine_SmtpTLSOutgoing(t *testing.T) {
@@ -161,6 +194,24 @@ func TestCollectFromLogLine_SmtpTLSOutgoing(t *testing.T) {
 // ---------------------------------------------------------------------------
 // Testes de CollectFromLogLine — smtpd (incoming)
 // ---------------------------------------------------------------------------
+
+func TestCollectFromLogLine_SmtpTLSHandshakeFailure(t *testing.T) {
+	e := newTestExporter(t)
+	// Real production line: TLS handshake failed on nested subprocess (polite/smtp)
+	e.CollectFromLogLine("2026-06-16T17:18:31.925885-03:00 PostfixCSUPorto postfix/polite/smtp[35821]: 4gfyry6Qhcz4ydk: Cannot start TLS: handshake failure")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpTLSHandshakeFailures), "should count TLS handshake failure")
+	assert.Equal(t, 0.0, counterValue(t, e.smtpConnectionTimedOut), "should NOT count as connection timed out")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.smtpConnectionReset), "should NOT count as connection reset")
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
+
+func TestCollectFromLogLine_SmtpTLSHandshakeFailure_Classic(t *testing.T) {
+	e := newTestExporter(t)
+	// Classic syslog timestamp format
+	e.CollectFromLogLine("Jun 16 17:18:31 mail postfix/smtp[35821]: AABBCC: Cannot start TLS: handshake failure")
+	assert.Equal(t, 1.0, counterValue(t, e.smtpTLSHandshakeFailures))
+	assert.Equal(t, 0.0, counterVecTotal(t, e.unsupportedLogEntries), "should NOT be unsupported")
+}
 
 func TestCollectFromLogLine_SmtpdConnect(t *testing.T) {
 	e := newTestExporter(t)
