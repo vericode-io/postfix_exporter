@@ -103,6 +103,9 @@ func TestCollectFromSampleLogFile(t *testing.T) {
 	// Estas assertions são adaptadas automaticamente ao arquivo real:
 	// se o arquivo real tiver mais eventos, os valores serão maiores.
 
+	assert.GreaterOrEqual(t, counterVecTotal(t, e.smtpProcessesByDSN), 1.0,
+		"smtp: ao menos 1 DSN capturado esperado")
+
 	assert.GreaterOrEqual(t, counterValue(t, e.cleanupProcesses), 1.0,
 		"cleanup: ao menos 1 mensagem processada esperada")
 
@@ -231,6 +234,25 @@ func TestCollectFromRealLogFile(t *testing.T) {
 			}
 			if m.Counter.GetValue() > 0 {
 				t.Logf("  status=%-12s count=%.0f", status, m.Counter.GetValue())
+			}
+		}
+	}
+
+	// Imprimir entregas SMTP por status e DSN
+	if smtpDSN, ok := metrics["postfix_smtp_messages_processed_by_dsn_total"]; ok {
+		t.Log("=== Entregas SMTP por DSN ===")
+		for _, m := range smtpDSN {
+			var status, dsn string
+			for _, lp := range m.GetLabel() {
+				if lp.GetName() == "status" {
+					status = lp.GetValue()
+				}
+				if lp.GetName() == "dsn" {
+					dsn = lp.GetValue()
+				}
+			}
+			if m.Counter.GetValue() > 0 {
+				t.Logf("  status=%-12s dsn=%-8s count=%.0f", status, dsn, m.Counter.GetValue())
 			}
 		}
 	}

@@ -59,7 +59,8 @@ type PostfixExporter struct {
 	smtpTLSHandshakeFailures  prometheus.Counter
 	smtpConnectionTimedOut    prometheus.Counter
 	smtpConnectionReset       *prometheus.CounterVec
-	smtpProcesses          *prometheus.CounterVec
+	smtpProcesses             *prometheus.CounterVec
+	smtpProcessesByDSN        *prometheus.CounterVec
 	// should be the same as smtpProcesses{status=deferred}, kept for compatibility, but this doesn't work !
 	smtpDeferreds                   prometheus.Counter
 	smtpdConnects                   prometheus.Counter
@@ -307,6 +308,7 @@ var (
 	qmgrInsertLine                      = regexp.MustCompile(`:.*, size=(\d+), nrcpt=(\d+) `)
 	qmgrExpiredLine                     = regexp.MustCompile(`:.*, status=(expired|force-expired), returned to sender`)
 	smtpStatusLine                      = regexp.MustCompile(`, status=(\w+)[ (]`)
+	smtpDSNLine                         = regexp.MustCompile(`, dsn=([^, ]+)`)
 	smtpTLSLine                         = regexp.MustCompile(`^(\S+) TLS connection established to \S+: (\S+) with cipher (\S+) \((\d+)/(\d+) bits\)`)
 	smtpConnectionTimedOut              = regexp.MustCompile(`^connect\s+to\s+(.*)\[(.*)\]:(\d+):\s+(Connection timed out|Connection refused|No route to host|Network is unreachable)`)
 	smtpLostConnectionLine              = regexp.MustCompile(`^lost connection with \S+ while (?:sending|receiving the initial server) (\S+)`)
@@ -427,12 +429,9 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				addToHistogramVec(e.smtpDelays, smtpMatches[3], "queue_manager", "")
 				addToHistogramVec(e.smtpDelays, smtpMatches[4], "connection_setup", "")
 				addToHistogramVec(e.smtpDelays, smtpMatches[5], "transmission", "")
-				if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
-					e.smtpProcesses.WithLabelValues(smtpStatusMatches[1]).Inc()
-					if smtpStatusMatches[1] == "deferred" {
-						e.smtpStatusDeferred.Inc()
+					if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
+						e.recordSMTPProcess(smtpStatusMatches[1], remainder)
 					}
-				}
 			} else if smtpTLSMatches := smtpTLSLine.FindStringSubmatch(body); smtpTLSMatches != nil {
 				e.smtpTLSConnects.WithLabelValues(smtpTLSMatches[1:]...).Inc()
 			} else if strings.HasPrefix(body, "Cannot start TLS") {
@@ -445,10 +444,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				// Delivery lines without delays= field (e.g. remote server multi-line responses,
 				// lost connection while sending, host said: 421/550, etc.).
 				// Count the status but skip delay histograms (no timing data available).
-				e.smtpProcesses.WithLabelValues(smtpStatusMatches[1]).Inc()
-				if smtpStatusMatches[1] == "deferred" {
-					e.smtpStatusDeferred.Inc()
-				}
+				e.recordSMTPProcess(smtpStatusMatches[1], remainder)
 			} else if lostConnMatches := smtpLostConnectionLine.FindStringSubmatch(body); lostConnMatches != nil {
 				// Remote server actively reset the connection during an SMTP stage.
 				// lostConnMatches[1] is the last token of the stage (e.g. "RCPT", "DATA", "greeting").
@@ -466,8 +462,7 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 				// Remote server rejection lines without a local status= field.
 				// These are intermediate log lines; the final status= appears in a
 				// subsequent line. Count as deferred for observability purposes.
-				e.smtpProcesses.WithLabelValues("deferred").Inc()
-				e.smtpStatusDeferred.Inc()
+				e.recordSMTPProcess("deferred", remainder)
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
@@ -509,17 +504,14 @@ func (e *PostfixExporter) CollectFromLogLine(line string) {
 			// postfix/error handles delivery errors (e.g. delivery temporarily suspended).
 			// These lines always carry a status= field.
 			if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
-				e.smtpProcesses.WithLabelValues(smtpStatusMatches[1]).Inc()
-				if smtpStatusMatches[1] == "deferred" {
-					e.smtpStatusDeferred.Inc()
-				}
+				e.recordSMTPProcess(smtpStatusMatches[1], remainder)
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
 		case "discard":
 			// postfix/discard silently discards messages. Count sent status if present.
 			if smtpStatusMatches := smtpStatusLine.FindStringSubmatch(remainder); smtpStatusMatches != nil {
-				e.smtpProcesses.WithLabelValues("discarded").Inc()
+				e.recordSMTPProcess("discarded", remainder)
 			} else {
 				e.addToUnsupportedLine(line, subprocess, level)
 			}
@@ -565,6 +557,23 @@ func addToHistogramVec(h *prometheus.HistogramVec, value, fieldName string, labe
 		log.Printf("Couldn't convert value '%s' for %v: %v", value, fieldName, err)
 	}
 	h.WithLabelValues(labels...).Observe(float)
+}
+
+func smtpDSN(remainder string) string {
+	if matches := smtpDSNLine.FindStringSubmatch(remainder); matches != nil {
+		return matches[1]
+	}
+	return ""
+}
+
+func (e *PostfixExporter) recordSMTPProcess(status, remainder string) {
+	e.smtpProcesses.WithLabelValues(status).Inc()
+	if dsn := smtpDSN(remainder); dsn != "" {
+		e.smtpProcessesByDSN.WithLabelValues(status, dsn).Inc()
+	}
+	if status == "deferred" {
+		e.smtpStatusDeferred.Inc()
+	}
 }
 
 // NewPostfixExporter creates a new Postfix exporter instance.
@@ -655,7 +664,14 @@ func NewPostfixExporter(showqPath string, logSrc LogSource, logUnsupportedLines 
 				Help:      "Total number of messages that have been processed by the smtp process.",
 			},
 			[]string{"status"}),
-			smtpTLSHandshakeFailures: prometheus.NewCounter(prometheus.CounterOpts{
+		smtpProcessesByDSN: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "postfix",
+				Name:      "smtp_messages_processed_by_dsn_total",
+				Help:      "Total number of SMTP messages processed, partitioned by status and DSN.",
+			},
+			[]string{"status", "dsn"}),
+				smtpTLSHandshakeFailures: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "postfix",
 				Name:      "smtp_tls_handshake_failures_total",
 				Help:      "Total number of outbound TLS handshake failures (Cannot start TLS).",
@@ -770,9 +786,10 @@ func (e *PostfixExporter) Describe(ch chan<- *prometheus.Desc) {
 	ch <- e.qmgrRemoves.Desc()
 	ch <- e.qmgrExpires.Desc()
 	e.smtpDelays.Describe(ch)
-	e.smtpTLSConnects.Describe(ch)
-	ch <- e.smtpDeferreds.Desc()
-	e.smtpProcesses.Describe(ch)
+		e.smtpTLSConnects.Describe(ch)
+		ch <- e.smtpDeferreds.Desc()
+		e.smtpProcesses.Describe(ch)
+		e.smtpProcessesByDSN.Describe(ch)
 	ch <- e.smtpdConnects.Desc()
 	ch <- e.smtpdDisconnects.Desc()
 	ch <- e.smtpdFCrDNSErrors.Desc()
@@ -851,9 +868,10 @@ func (e *PostfixExporter) Collect(ch chan<- prometheus.Metric) {
 	ch <- e.qmgrRemoves
 	ch <- e.qmgrExpires
 	e.smtpDelays.Collect(ch)
-	e.smtpTLSConnects.Collect(ch)
-	ch <- e.smtpDeferreds
-	e.smtpProcesses.Collect(ch)
+		e.smtpTLSConnects.Collect(ch)
+		ch <- e.smtpDeferreds
+		e.smtpProcesses.Collect(ch)
+		e.smtpProcessesByDSN.Collect(ch)
 	ch <- e.smtpdConnects
 	ch <- e.smtpdDisconnects
 	ch <- e.smtpdFCrDNSErrors

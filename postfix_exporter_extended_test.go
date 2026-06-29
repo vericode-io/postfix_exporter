@@ -137,6 +137,7 @@ func TestCollectFromLogLine_SmtpSent(t *testing.T) {
 	e := newTestExporter(t)
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: to=<rcpt@example.com>, relay=mx.example.com[1.2.3.4]:25, delay=1.0, delays=0.1/0.2/0.3/0.4, dsn=2.0.0, status=sent (250 OK)")
 	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcesses))
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcessesByDSN))
 }
 
 func TestCollectFromLogLine_SmtpDeferred(t *testing.T) {
@@ -144,6 +145,7 @@ func TestCollectFromLogLine_SmtpDeferred(t *testing.T) {
 	e.CollectFromLogLine("Jun 23 10:00:00 mail postfix/smtp[1234]: AABBCC: to=<rcpt@example.com>, relay=mx.example.com[1.2.3.4]:25, delay=1.0, delays=0.1/0.2/0.3/0.4, dsn=4.0.0, status=deferred (connection refused)")
 	assert.Equal(t, 1.0, counterValue(t, e.smtpStatusDeferred))
 	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcesses))
+	assert.Equal(t, 1.0, counterVecTotal(t, e.smtpProcessesByDSN))
 }
 
 func TestCollectFromLogLine_SmtpConnectionTimedOut(t *testing.T) {

@@ -28,6 +28,7 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 		smtpDeferreds                   prometheus.Counter
 		smtpStatusDeferred              prometheus.Counter
 		smtpProcesses                   *prometheus.CounterVec
+		smtpProcessesByDSN              *prometheus.CounterVec
 		smtpdConnects                   prometheus.Counter
 		smtpdDisconnects                prometheus.Counter
 		smtpdFCrDNSErrors               prometheus.Counter
@@ -192,10 +193,11 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 				smtpdMessagesProcessed: 0,
 				smtpMessagesProcessed:  1,
 			},
-			fields: fields{
-				smtpDelays: prometheus.NewHistogramVec(prometheus.HistogramOpts{}, []string{"stage"}),
-				smtpProcesses: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status"}),
-			},
+				fields: fields{
+					smtpDelays: prometheus.NewHistogramVec(prometheus.HistogramOpts{}, []string{"stage"}),
+					smtpProcesses: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status"}),
+					smtpProcessesByDSN: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status", "dsn"}),
+				},
 		},
 		{
 			name: "Testing different smtp statuses",
@@ -212,13 +214,14 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 				smtpMessagesProcessed:  3,
 				bounceNonDelivery: 1,
 			},
-			fields: fields{
-				unsupportedLogEntries: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"service", "level"}),
-				smtpDelays: prometheus.NewHistogramVec(prometheus.HistogramOpts{}, []string{"stage"}),
-				smtpStatusDeferred: prometheus.NewCounter(prometheus.CounterOpts{}),
-				smtpProcesses: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status"}),
-				bounceNonDelivery: prometheus.NewCounter(prometheus.CounterOpts{}),
-			},
+				fields: fields{
+					unsupportedLogEntries: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"service", "level"}),
+					smtpDelays: prometheus.NewHistogramVec(prometheus.HistogramOpts{}, []string{"stage"}),
+					smtpStatusDeferred: prometheus.NewCounter(prometheus.CounterOpts{}),
+					smtpProcesses: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status"}),
+					smtpProcessesByDSN: prometheus.NewCounterVec(prometheus.CounterOpts{}, []string{"status", "dsn"}),
+					bounceNonDelivery: prometheus.NewCounter(prometheus.CounterOpts{}),
+				},
 		},
 		{
 			name: "Testing virtual delivered",
@@ -268,10 +271,11 @@ func TestPostfixExporter_CollectFromLogline(t *testing.T) {
 				qmgrExpires:                     tt.fields.qmgrExpires,
 				smtpDelays:                      tt.fields.smtpDelays,
 				smtpTLSConnects:                 tt.fields.smtpTLSConnects,
-				smtpDeferreds:                   tt.fields.smtpDeferreds,
-				smtpStatusDeferred:              tt.fields.smtpStatusDeferred,
-				smtpProcesses:                   tt.fields.smtpProcesses,
-				smtpdConnects:                   tt.fields.smtpdConnects,
+					smtpDeferreds:                   tt.fields.smtpDeferreds,
+					smtpStatusDeferred:              tt.fields.smtpStatusDeferred,
+					smtpProcesses:                   tt.fields.smtpProcesses,
+					smtpProcessesByDSN:              tt.fields.smtpProcessesByDSN,
+					smtpdConnects:                   tt.fields.smtpdConnects,
 				smtpdDisconnects:                tt.fields.smtpdDisconnects,
 				smtpdFCrDNSErrors:               tt.fields.smtpdFCrDNSErrors,
 				smtpdLostConnections:            tt.fields.smtpdLostConnections,
